@@ -1,13 +1,9 @@
-# 安卓和 iOS 共用的外部库编译。由 android-build.sh / ios-build.sh 载入后调用 run_deps。
-# 调用方需要先准备好：SRC PREFIX OUT ROOT J REPORT TRIPLE ARCH VPXTARGET CMAKE_BASE X264_CFG PLAT_CFLAGS
-#                    merge_static（合并静态库的函数）、$ROOT/meson-cross.txt、CC/CXX/AR/RANLIB 等环境变量
-# ---------------- 小工具 ----------------
-fetch() { # 网址 目录名：下载并解压到 $SRC/目录名
+fetch() {
   local url="$1" name="$2" f="$SRC/$2.dl"
   curl -fL --retry 4 -o "$f" "$url" && rm -rf "$SRC/$name" && mkdir -p "$SRC/$name" \
     && tar -xf "$f" --strip-components=1 -C "$SRC/$name"
 }
-fixcfg() { # 老的 config.sub 不认识 android，用系统里新的覆盖
+fixcfg() {
   local s g
   s="$(find /usr/share /opt/homebrew/share /usr/local/share -name config.sub 2>/dev/null | head -1)"
   g="$(find /usr/share /opt/homebrew/share /usr/local/share -name config.guess 2>/dev/null | head -1)"
@@ -15,21 +11,21 @@ fixcfg() { # 老的 config.sub 不认识 android，用系统里新的覆盖
   [ -n "$g" ] && find . -name config.guess -exec cp "$g" {} \;
   return 0
 }
-ac() { # autotools 通用
+ac() {
   fixcfg
   ./configure --host="$TRIPLE" --prefix="$PREFIX" --disable-shared --enable-static --with-pic "$@" \
     && make -j"$J" && make install
 }
-cm() { # cmake 通用：源码目录 [额外参数]
+cm() {
   local s="$1"; shift
   cmake -S "$s" -B "$s/_b" "${CMAKE_BASE[@]}" "$@" && cmake --build "$s/_b" -j"$J" && cmake --install "$s/_b"
 }
-ms() { # meson 通用：源码目录 [额外参数]
+ms() {
   local s="$1"; shift
   meson setup "$s/_b" "$s" --cross-file "$ROOT/meson-cross.txt" --prefix "$PREFIX" --libdir lib \
     --buildtype release --default-library static "$@" && ninja -C "$s/_b" install
 }
-try() { # 名字 函数：失败只记录，不中断；之前编成功过（缓存里有标记）就直接跳过
+try() {
   local n="$1"; shift
   if [ -f "$PREFIX/.done-$n" ]; then echo "CACHE $n（上次已编好）" | tee -a "$REPORT"; return 0; fi
   echo "=== 编译 $n"
@@ -39,7 +35,6 @@ try() { # 名字 函数：失败只记录，不中断；之前编成功过（缓
   else echo "FAIL  $n（日志 logs/dep-$n.log）" | tee -a "$REPORT"; tail -n 20 "$OUT/logs/dep-$n.log"; fi
 }
 
-# ---------------- 各个外部库 ----------------
 dep_x264() {
   fetch "https://code.videolan.org/videolan/x264/-/archive/master/x264-master.tar.gz" x264
   cd "$SRC/x264"; fixcfg
@@ -47,7 +42,7 @@ dep_x264() {
     --enable-static --enable-pic --disable-cli --disable-opencl
   make -j"$J" && make install
 }
-dep_x265() { # 8/10/12 位合并成一个库（标准多位深做法）
+dep_x265() {
   fetch "https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz" x265
   cd "$SRC/x265"
   local common=("${CMAKE_BASE[@]}" -DENABLE_SHARED=OFF -DENABLE_CLI=OFF)
@@ -137,14 +132,13 @@ dep_soxr() {
   fetch "https://downloads.sourceforge.net/project/soxr/soxr-0.1.3-Source.tar.xz" soxr
   cm "$SRC/soxr" -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF -DWITH_OPENMP=OFF -DWITH_LSR_BINDINGS=OFF
 }
-
 dep_mbedtls() {
   fetch "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2" mbedtls
-  cm "$SRC/mbedtls" -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF -DMBEDTLS_FATAL_WARNINGS=OFF
+  cm "$SRC/mbedtls" -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF -DCMAKE_C_FLAGS=-Wno-error
 }
 dep_vmaf() {
   fetch "https://github.com/Netflix/vmaf/archive/refs/tags/v3.0.0.tar.gz" vmaf
-  ms "$SRC/vmaf/libvmaf" -Denable_tests=false -Denable_docs=false -Dbuilt_in_models=true -Denable_float=true
+  ms "$SRC/vmaf/libvmaf" -Denable_tests=false -Denable_docs=false -Dbuilt_in_models=true
 }
 dep_srt() {
   fetch "https://github.com/Haivision/srt/archive/refs/tags/v1.5.4.tar.gz" srt
@@ -168,7 +162,7 @@ dep_chromaprint() {
   fetch "https://github.com/acoustid/chromaprint/releases/download/v1.5.1/chromaprint-1.5.1.tar.gz" chromaprint
   cm "$SRC/chromaprint" -DBUILD_TOOLS=OFF -DBUILD_TESTS=OFF -DFFT_LIB=kissfft
 }
-dep_whisper() { # 用最新主干（FFmpeg 8 的 whisper 滤镜需要较新的 whisper.cpp）
+dep_whisper() {
   fetch "https://github.com/ggml-org/whisper.cpp/archive/refs/heads/master.tar.gz" whisper
   cm "$SRC/whisper" -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF -DWHISPER_BUILD_SERVER=OFF \
      -DGGML_METAL=OFF -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DGGML_CCACHE=OFF -DWHISPER_CURL=OFF
@@ -177,10 +171,11 @@ dep_lcms2() {
   fetch "https://github.com/mm2/Little-CMS/releases/download/lcms2.16/lcms2-2.16.tar.gz" lcms2
   cd "$SRC/lcms2"; ac --without-jpeg --without-tiff
 }
-dep_libxml2() { # 安卓 28 以下没有 iconv，所以关掉
+dep_libxml2() {
   fetch "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.5.tar.xz" libxml2
   cm "$SRC/libxml2" -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_ICONV=OFF -DLIBXML2_WITH_LZMA=OFF \
-     -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF -DLIBXML2_WITH_MODULES=OFF
+     -DLIBXML2_WITH_TESTS=OFF -DLIBXML2_WITH_PROGRAMS=OFF -DLIBXML2_WITH_MODULES=OFF \
+     -DCMAKE_DISABLE_FIND_PACKAGE_Iconv=ON
 }
 dep_openjpeg() {
   fetch "https://github.com/uclouvain/openjpeg/archive/refs/tags/v2.5.3.tar.gz" openjpeg
@@ -206,7 +201,6 @@ dep_gsm() {
   cp inc/gsm.h "$PREFIX/include/gsm/"
   cp lib/libgsm.a "$PREFIX/lib/"
 }
-
 
 run_deps() {
   try libvpx dep_vpx
@@ -238,7 +232,6 @@ run_deps() {
   try openh264 dep_openh264
   try speex dep_speex
   try gsm dep_gsm
-  # x264/x265 是 GPL，只给"完整版可执行文件"用；iOS 不能带 GPL，所以跳过
   if [ "${SKIP_GPL:-0}" != 1 ]; then
     try x264 dep_x264
     try x265 dep_x265
