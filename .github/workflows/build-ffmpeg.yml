@@ -1,6 +1,5 @@
 name: build-ffmpeg
 
-# 手动触发：GitHub 网页 -> Actions -> build-ffmpeg -> Run workflow
 on:
   workflow_dispatch:
     inputs:
@@ -70,9 +69,10 @@ jobs:
           msystem: MINGW64
           update: true
           install: >-
-            git make diffutils curl
+            git make diffutils curl xxd
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-nasm
+            mingw-w64-x86_64-yasm
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-x264
             mingw-w64-x86_64-x265
@@ -91,11 +91,13 @@ jobs:
             mingw-w64-x86_64-bzip2
             mingw-w64-x86_64-xz
             mingw-w64-x86_64-libiconv
+            mingw-w64-x86_64-ffnvcodec-headers
+            mingw-w64-x86_64-amf-headers
+            mingw-w64-x86_64-libvpl
 
       - name: 安装可选依赖（包名不存在就跳过，不影响整体）
         run: |
-          for p in svt-av1 aom zimg soxr ffnvcodec-headers amf-headers libvpl \
-                   libvmaf srt librist libjxl chromaprint whisper.cpp lcms2 libxml2 \
+          for p in svt-av1 aom zimg soxr libvmaf srt librist libjxl chromaprint whisper.cpp lcms2 libxml2 \
                    openjpeg2 kvazaar openh264 speex gsm; do
             pacman -S --noconfirm --needed "mingw-w64-x86_64-$p" || echo "跳过（没有这个包）：$p"
           done
