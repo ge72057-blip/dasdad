@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
-# 用法：bash scripts/android-build.sh android-arm64     （或 android-x86_64）
-#
-# 做三件事：
-#   1) 把所有外部库（x264、x265、字幕、AV1……）从源码交叉编译成 Android 版
-#   2) 编"完整版"：ffmpeg / ffprobe 可执行文件（含 x264、x265，GPL）
-#   3) 编"LGPL 版"：合并成一个 libffmpeg.so（不含 x264、x265），给软件里直接调用
-#
-# 每个外部库单独编，某一个失败不会拖垮整体——ffmpeg 只会启用"编成功了"的库，
-# 成功/失败清单写在 out/<目标>/dep-report.txt 里。
 set -u -o pipefail
 
 TARGET="${1:?缺少参数：android-arm64 或 android-x86_64}"
 FFVER="${FFMPEG_VERSION:-8.1.3}"
-API=24                                   # 和 ZUI.Android.csproj 的最低版本 24 保持一致
+API=24
 NDK="${ANDROID_NDK_HOME:?没有找到 ANDROID_NDK_HOME}"
 TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
 J="$(nproc)"
@@ -81,28 +72,23 @@ pkg_config_libdir = '$PREFIX/lib/pkgconfig'
 MESON
 
 X264_CFG=(--cross-prefix="$TOOLCHAIN/bin/llvm-")
-merge_static() { # 输出 输入...：把几个 .a 合成一个
+merge_static() {
   local o="$1"; shift
   { echo "CREATE $o"; for f in "$@"; do echo "ADDLIB $f"; done; echo SAVE; echo END; } | "$AR" -M
 }
-# shellcheck source=deps.sh
 source "$(dirname "$0")/deps.sh"
 run_deps
 
-# 这些库的 .pc 里写着 -lstdc++，Android 上不用，去掉（C++ 运行库在最后链接时静态带上）
 sed -i 's/-lstdc++//g' "$PREFIX"/lib/pkgconfig/*.pc 2>/dev/null || true
 
-# ---------------- 决定 ffmpeg 启用哪些库（只启用编成功的；清单和 Windows 共用 scripts/libflags.sh） ----------------
-LIBDIR="$PREFIX/lib"; USE_MBEDTLS=1
-# shellcheck source=libflags.sh
+LIBDIR="$PREFIX/lib"
 source "$(dirname "$0")/libflags.sh"
 
-# ---------------- ffmpeg 源码 ----------------
 rm -rf "$SRC/ffmpeg"
 git clone --depth 1 --branch "n$FFVER" https://github.com/FFmpeg/FFmpeg.git "$SRC/ffmpeg" || { echo "下载 FFmpeg n$FFVER 失败（版本号对不对？）"; exit 1; }
 unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
 
-ff_conf() { # 名字 额外参数...
+ff_conf() {
   local name="$1"; shift
   rm -rf "$ROOT/ffb-$name"; mkdir -p "$ROOT/ffb-$name"; cd "$ROOT/ffb-$name" || return 1
   "$SRC/ffmpeg/configure" --prefix="$ROOT/ffi-$name" \
@@ -112,14 +98,13 @@ ff_conf() { # 名字 额外参数...
     --enable-pic --disable-autodetect --disable-doc --disable-debug --disable-avdevice --disable-symver \
     --enable-zlib --enable-jni --enable-mediacodec \
     --extra-cflags="-I$PREFIX/include -fPIC" \
-    --extra-ldflags="-L$PREFIX/lib -static-libstdc++ -Wl,-z,max-page-size=16384" \
+    --extra-ldflags="-L$PREFIX/lib -static-libstdc++" \
     "${LIBFLAGS[@]}" "$@" 2>&1 | tee "$OUT/logs/configure-$name.txt"
   local rc="${PIPESTATUS[0]}"
   [ "$rc" -eq 0 ] || cp ffbuild/config.log "$OUT/logs/config-$name.log" 2>/dev/null
   return "$rc"
 }
 
-# ---------------- 第一套：完整版可执行文件（GPL，含 x264/x265） ----------------
 FULL=(--enable-gpl --enable-programs --disable-shared --enable-static --enable-pie)
 have x264 && FULL+=(--enable-libx264)
 have x265 && FULL+=(--enable-libx265)
@@ -131,15 +116,13 @@ else
   echo "FAIL  ffmpeg完整版（可执行文件）" | tee -a "$REPORT"
 fi
 
-# ---------------- 第二套：LGPL 版，合并成一个 libffmpeg.so ----------------
 if ff_conf lgpl --disable-gpl --disable-nonfree --disable-programs --disable-shared --enable-static \
    && make -C "$ROOT/ffb-lgpl" -j"$J" && make -C "$ROOT/ffb-lgpl" install; then
   FFLIB="$ROOT/ffi-lgpl/lib"
   EXTRA="$(PKG_CONFIG_LIBDIR="$FFLIB/pkgconfig:$PREFIX/lib/pkgconfig" pkg-config --static --libs \
             libavformat libavcodec libavfilter libswscale libswresample libavutil)"
-  # shellcheck disable=SC2086
   "$CXX" -shared -o "$OUT/lgpl/lib/libffmpeg.so" -Wl,-soname,libffmpeg.so \
-    -static-libstdc++ -Wl,-z,max-page-size=16384 \
+    -static-libstdc++ \
     -Wl,--whole-archive "$FFLIB/libavformat.a" "$FFLIB/libavcodec.a" "$FFLIB/libavfilter.a" \
       "$FFLIB/libswscale.a" "$FFLIB/libswresample.a" "$FFLIB/libavutil.a" -Wl,--no-whole-archive \
     $EXTRA -landroid -llog -lmediandk -lm -lz -ldl \
@@ -150,12 +133,11 @@ else
   echo "FAIL  ffmpeg LGPL 版配置/编译" | tee -a "$REPORT"
 fi
 
-# ---------------- 第三套：标准的分开的 .so（libavcodec.so 这类，名字不带版本号） ----------------
 if ff_conf shared --disable-gpl --disable-nonfree --disable-programs --enable-shared --disable-static; then
-  # 把"带版本号的库名"改成"不带版本号"，Android 打包才认
   sed -i.bak -e 's|^SLIBNAME_WITH_MAJOR=.*|SLIBNAME_WITH_MAJOR=$(SLIBNAME)|' \
              -e 's|^SLIB_INSTALL_NAME=.*|SLIB_INSTALL_NAME=$(SLIBNAME)|' \
              -e 's|^SLIB_INSTALL_LINKS=.*|SLIB_INSTALL_LINKS=|' "$ROOT/ffb-shared/ffbuild/config.mak"
+  rm -f "$ROOT/ffb-shared/ffbuild/config.mak.bak"
   if make -C "$ROOT/ffb-shared" -j"$J" && make -C "$ROOT/ffb-shared" install \
      && ls "$ROOT/ffi-shared/lib/libavcodec.so" >/dev/null 2>&1; then
     mkdir -p "$OUT/lgpl-split/$ABI"
@@ -169,7 +151,6 @@ else
   echo "FAIL  分开的 .so 配置" | tee -a "$REPORT"
 fi
 
-# ---------------- 汇总：两套各启用了哪些外部库 ----------------
 for n in full lgpl shared; do
   { echo; echo "--- $n 启用的外部库 ---"; sed -n '/^External libraries:/,/^$/p' "$OUT/logs/configure-$n.txt" 2>/dev/null; } >> "$REPORT"
 done
