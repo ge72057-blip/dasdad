@@ -1,12 +1,4 @@
 #!/usr/bin/env bash
-# 在 GitHub 的 macOS 机器上运行（不需要你自己有 Mac）。
-# 用法：bash scripts/ios-build.sh ios-arm64        （真机）
-#       bash scripts/ios-build.sh ios-sim-arm64    （模拟器，Apple 芯片的 Mac 上用）
-#
-# iOS 的两个硬性规矩：
-#   1) 不能运行外部程序，所以没有 ffmpeg 可执行文件，只有库；转码也要通过库来做。
-#   2) 不能带 GPL，所以没有 x264/x265（App Store 与 GPL 不兼容）；H.264/H.265 编码走系统的 VideoToolbox 硬件。
-# 产出：out/<目标>/lgpl/lib/libffmpeg.a（所有库合并成一个静态库）和 link-flags.txt（链接时要加的系统框架）。
 set -u -o pipefail
 
 TARGET="${1:?缺少参数：ios-arm64 或 ios-sim-arm64}"
@@ -26,7 +18,6 @@ ROOT="$PWD/build/$TARGET"; SRC="$ROOT/src"; PREFIX="$ROOT/prefix"; OUT="$PWD/out
 mkdir -p "$SRC" "$PREFIX/lib/pkgconfig" "$OUT/lgpl/lib" "$OUT/logs"
 REPORT="$OUT/dep-report.txt"; : > "$REPORT"
 
-# autoreconf 要用到的 libtoolize（brew 里叫 glibtoolize，这里让它也能用 libtoolize 这个名字）
 export PATH="$(brew --prefix libtool)/libexec/gnubin:$PATH"
 
 PLAT_CFLAGS="-arch arm64 -isysroot $SDK $MINFLAG"
@@ -73,19 +64,17 @@ pkg_config_libdir = '$PREFIX/lib/pkgconfig'
 MESON
 
 X264_CFG=()
-merge_static() { # 输出 输入...：把几个 .a 合成一个（苹果自带的 libtool）
+merge_static() {
   local o="$1"; shift
   libtool -static -o "$o" "$@"
 }
-# shellcheck source=deps.sh
 source "$(dirname "$0")/deps.sh"
 run_deps
 
-# iOS 的 C++ 运行库叫 libc++（不是 stdc++）
-sed -i.bak 's/-lstdc++/-lc++/g' "$PREFIX"/lib/pkgconfig/*.pc 2>/dev/null; rm -f "$PREFIX"/lib/pkgconfig/*.bak
+sed -i.bak 's/-lstdc++/-lc++/g' "$PREFIX"/lib/pkgconfig/*.pc 2>/dev/null
+rm -f "$PREFIX"/lib/pkgconfig/*.bak
 
-LIBDIR="$PREFIX/lib"; USE_MBEDTLS=1
-# shellcheck source=libflags.sh
+LIBDIR="$PREFIX/lib"
 source "$(dirname "$0")/libflags.sh"
 
 rm -rf "$SRC/ffmpeg"
@@ -117,7 +106,6 @@ if make -j"$J" && make install; then
     case "$t" in -l*) f="$PREFIX/lib/lib${t#-l}.a"; [ -f "$f" ] && LIBS+=("$f") ;; esac
   done
   LIST="$(printf '%s\n' "${LIBS[@]}" | awk '!s[$0]++')"
-  # shellcheck disable=SC2086
   libtool -static -o "$OUT/lgpl/lib/libffmpeg.a" \
     "$FFLIB/libavformat.a" "$FFLIB/libavcodec.a" "$FFLIB/libavfilter.a" \
     "$FFLIB/libswscale.a" "$FFLIB/libswresample.a" "$FFLIB/libavutil.a" $LIST \
