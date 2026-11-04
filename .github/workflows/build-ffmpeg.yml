@@ -73,7 +73,6 @@ jobs:
             git make diffutils curl
             mingw-w64-x86_64-toolchain
             mingw-w64-x86_64-nasm
-            mingw-w64-x86_64-yasm
             mingw-w64-x86_64-pkgconf
             mingw-w64-x86_64-x264
             mingw-w64-x86_64-x265
